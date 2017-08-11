@@ -1,0 +1,89 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure(2) do |config|
+
+	config.hostmanager.enabled = true
+	config.hostmanager.manage_guest = true
+	config.hostmanager.manage_host = false
+	config.hostmanager.include_offline = false
+	config.hostmanager.ignore_private_ip = true
+
+	config.vm.define "puppet" do |puppet|
+		# Puppetmaster on CentOS 7
+		config.vm.provider "virtualbox" do |v|
+		  v.memory = 2048
+		end
+		puppet.vm.synced_folder ".", "/vagrant"
+		puppet.vm.synced_folder "../code", "/puppet_code"
+		puppet.vm.synced_folder "../puppetserver", "/puppet_puppetserver"
+		puppet.vm.box = "boxcutter/centos72"
+		puppet.vm.hostname = "puppet.talentsoft.com"
+		#puppet.vm.network :private_network, ip: "10.0.20.10"
+		puppet.vm.network "public_network", use_dhcp_assigned_default_route: true
+		puppet.vm.network "forwarded_port", guest: 8140, host: 8140
+		puppet.vm.provision "shell", inline: <<-SHELL
+		  sudo yum update -y
+		  sudo rpm -ivh https://yum.puppetlabs.com/puppetlabs-release-pc1-el-7.noarch.rpm
+		  sudo yum install puppetserver -y
+		  sudo rm -rf /etc/puppetlabs/code
+		  sudo ln -s /puppet_code /etc/puppetlabs/code
+		  sudo rm -rf /etc/puppetlabs/puppetserver
+		  sudo ln -s /puppet_puppetserver /etc/puppetlabs/puppetserver
+		  sudo sed -i 's/2g/512m/g' /etc/sysconfig/puppetserver
+		  echo "*.talentsoft.com" | sudo tee /etc/puppetlabs/puppet/autosign.conf
+			sudo /opt/puppetlabs/bin/puppetserver gem install hiera-eyaml
+      sudo cp -r /vagrant/keys /etc/puppetlabs
+      sudo chown puppet:puppet /etc/puppetlabs/keys/private_key.pkcs7.pem
+      sudo chown puppet:puppet /etc/puppetlabs/keys/public_key.pkcs7.pem
+		  sudo service puppetserver start
+		SHELL
+		puppet.hostmanager.ip_resolver = proc do |machine|
+	    result = ""
+	    machine.communicate.execute("ifconfig eth1") do |type, data|
+	      result << data if type == :stdout
+	    end
+	    (ip = /^\s*inet .*?(\d+\.\d+\.\d+\.\d+)\s+/.match(result)) && ip[1]
+	  end
+		puppet.hostmanager.aliases = %w(puppet)
+	end
+
+	 config.vm.define "agent1" do |agent1|
+		 # Puppet agent on CentOS 7
+		agent1.vm.box = "boxcutter/centos72"
+		agent1.vm.hostname = "agent1.talentsoft.com"
+		#agent1.vm.network :private_network, ip: "10.0.20.11"
+		agent1.vm.network "public_network", use_dhcp_assigned_default_route: true
+		agent1.vm.provision "shell", inline: <<-SHELL
+		  sudo yum update -y
+		  sudo rpm -ivh https://yum.puppetlabs.com/puppetlabs-release-pc1-el-7.noarch.rpm
+		  sudo yum install puppet-agent -y
+		  sudo service puppet start
+		SHELL
+		agent1.hostmanager.ip_resolver = proc do |machine|
+	    result = ""
+	    machine.communicate.execute("ifconfig eth1") do |type, data|
+	      result << data if type == :stdout
+	    end
+	    (ip = /^\s*inet .*?(\d+\.\d+\.\d+\.\d+)\s+/.match(result)) && ip[1]
+	  end
+		agent1.hostmanager.aliases = %w(agent1)
+	 end
+
+	 config.vm.define "agent3" do |agent3|
+		# Puppet agent on Windows 2012
+		agent3.vm.box = "devopsguys/Windows2012R2Eval"
+		agent3.vm.hostname = "agent3"
+		#agent3.vm.network :private_network, ip: "10.0.20.13"
+		agent3.vm.network "public_network", use_dhcp_assigned_default_route: true
+		agent3.vm.provision "shell", :path => "windows.ps1"
+		agent3.hostmanager.ip_resolver = proc do |machine|
+        result = ""
+        machine.communicate.execute("gwmi Win32_NetworkAdapterConfiguration | Where { $_.IPAddress } | Select -Expand IPAddress | Select-Object -Skip 2 | Select-Object -First 1") do |type, data|
+          result << data if type == :stdout
+        end
+        (ip = /(\d+\.\d+\.\d+\.\d+)/.match(result)) && ip[1]
+      end
+		agent3.hostmanager.aliases = %w(agent3)
+	  end
+end
